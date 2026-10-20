@@ -1,6 +1,16 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Added
+
+- Added execution context providers that keep task queues per fiber or coroutine
+- Added ownership checks that reject cross-context use of pending promises with `CrossContextException` when an execution context provider is configured
+- Added `ExecutionContext::onFinish()` and `ExecutionContext::finish()` to cancel and drain work when a context ends
+- Added `FiberExecutionContextProvider` for native PHP fibers
+
+
 ## 3.0.2 - 2026-08-24
 
 ### Added
