@@ -63,6 +63,9 @@ notify Guzzle when they end, so schedulers should call
 `ExecutionContext::finish(\Fiber::getCurrent())` as the last step inside each
 fiber, because finishing a context runs its callbacks in that context.
 
+This provider identifies fibers; it does not schedule them or make blocking
+I/O nonblocking.
+
 Requires PHP 8.1 or newer.
 
 ### Coroutine Extensions
@@ -116,18 +119,20 @@ settles.
 | Resolving with the pending promise or coroutine | Rejected | Allowed |
 
 Rejected operations throw `GuzzleHttp\Promise\CrossContextException` without
-changing the promise. Guzzle cannot see inside promises from other libraries. If
-one refuses the callbacks of a promise resolved with it, for example because its
-`then()` forwards to another context's pending promise, the exception is thrown
-and the promise is left unchanged. If it calls the callbacks before throwing,
-the exception is thrown and the promise stays settled.
+changing the promise. Guzzle cannot see inside promises from other libraries.
+With a provider configured, if a foreign `then()` throws before invoking either
+callback, the outer promise is restored to its pending state and the exception
+is rethrown. If it calls back before throwing, the outer promise remains settled.
+Without a provider, the outer promise remains settled in either case, preserving
+the existing behavior.
 
 The promise that `then()` returns is owned by the context that called `then()`,
 and its callbacks run in that context. When another context settles the promise,
 the callbacks are queued for the registering context, which runs them the next
 time it drains its task queue, such as while it waits or when it is finished.
-Callbacks registered by a context that has been finished or has ended are
-dropped.
+Callbacks for a context that has ended are dropped. After a context is
+finished, callbacks queued for it by other contexts are dropped until it uses
+promises again. Callbacks already dropped are not replayed.
 
 A context that registers callbacks on a promise that another context settles
 must drain its own task queue to run them, for example by waiting on the promise
@@ -143,10 +148,16 @@ is rejected, because nothing can settle the promise any more. Promises created
 outside managed contexts are not restricted, but calling `then()` on them from a
 managed context returns a promise that context owns.
 
+Promises created inside a managed context, including those returned by a
+handler invoked there, must be settled by that context. A resolver running in
+an event loop's own fiber is a different context.
+
 While one context runs the wait function of a promise, waiting on that promise
 from another context, directly or through a promise that depends on it, throws a
 `CrossContextException` and leaves both promises unchanged. This applies to
-promises that no context owns as well.
+promises that no context owns as well. Abandoning a fiber during `wait()` does
+not make the wait restartable: the wait function has already been used, so a
+later `wait()` on the still-pending promise is rejected.
 
 `Coroutine`, `EachPromise`, `Each`, and the `Utils` helpers create Guzzle
 promises internally, so they follow the same rules. A `Coroutine` checks
@@ -170,8 +181,8 @@ inside the context being finished, so that callbacks keep running in the
 context that owns them. Calling it again for the same context is harmless.
 
 Once a context is finished, callbacks that other contexts queue for it are
-dropped. If the context uses promises again, for example in a later shutdown
-callback, Guzzle tracks it as a new context.
+dropped until it uses promises again, for example in a later shutdown
+callback. Callbacks already dropped are not replayed.
 
 `FinalizingExecutionContextProviderInterface::onFinish()`: Registers a callback
 that the runtime invokes, inside the current context, when that context ends.
